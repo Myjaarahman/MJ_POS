@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async'; // Needed for the stream subscription
 import 'payment_screen.dart'; 
 import 'add_product_screen.dart';
 import 'receipts_screen.dart';
@@ -19,7 +20,11 @@ class _PosScreenState extends State<PosScreen> {
   // Data Variables
   List<Map<String, dynamic>> _cart = [];
   int? _selectedWaitingNumber;
-  List<int> _unavailableNumbers = []; // This will now update live!
+  
+  // Real-Time Busy Numbers
+  List<int> _unavailableNumbers = []; 
+  StreamSubscription? _orderSubscription; // To manage the listener
+
   final TextEditingController _waitingNumberController = TextEditingController();
   
   // Business Info
@@ -34,8 +39,14 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void initState() {
     super.initState();
-    _listenToBusyNumbers(); // <--- NEW: Real-time listener
+    _subscribeToOrders(); // Start listening immediately
     _fetchBusinessInfo(); 
+  }
+
+  @override
+  void dispose() {
+    _orderSubscription?.cancel(); // Stop listening when screen closes
+    super.dispose();
   }
 
   Future<void> _fetchBusinessInfo() async {
@@ -52,33 +63,32 @@ class _PosScreenState extends State<PosScreen> {
 
       if (businessId != null) {
         final business = await supabase.from('businesses').select('name').eq('id', businessId).single();
-        if (mounted) {
-          setState(() {
-            _businessName = business['name'];
-          });
-        }
+        if (mounted) setState(() => _businessName = business['name']);
       }
     } catch (e) {
       debugPrint("Error fetching business info: $e");
     }
   }
 
-  // --- NEW: REAL-TIME LISTENER ---
-  void _listenToBusyNumbers() {
-    // This listens to ANY change in the orders table
-    supabase.from('orders').stream(primaryKey: ['id']).listen((data) {
-      if (mounted) {
-        setState(() {
-          // We filter the data live. 
-          // If status becomes 'completed', it gets removed from this list instantly.
-          _unavailableNumbers = data
-              .where((order) => order['status'] == 'pending' || order['status'] == 'cooking')
-              .map((order) => order['waiting_number'] as int)
-              .toList()
-              ..sort(); // Keep them sorted (1, 2, 3...)
+  // --- THE REAL-TIME LISTENER ---
+  void _subscribeToOrders() {
+    // This stream listens to the 'orders' table 24/7
+    _orderSubscription = supabase
+        .from('orders')
+        .stream(primaryKey: ['id'])
+        .listen((data) {
+          if (mounted) {
+            setState(() {
+              // Filter: Only show numbers for 'pending' or 'cooking' orders.
+              // 'completed' orders will be automatically removed from this list.
+              _unavailableNumbers = data
+                  .where((order) => order['status'] == 'pending' || order['status'] == 'cooking')
+                  .map((order) => order['waiting_number'] as int)
+                  .toList()
+                  ..sort(); 
+            });
+          }
         });
-      }
-    });
   }
 
   void _addToCart(Map<String, dynamic> product) {
@@ -135,7 +145,7 @@ class _PosScreenState extends State<PosScreen> {
                   TextField(
                     controller: noteCtrl,
                     decoration: const InputDecoration(
-                      labelText: "Special Instruction (e.g. No Sugar)",
+                      labelText: "Special Instruction",
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -147,7 +157,7 @@ class _PosScreenState extends State<PosScreen> {
                     setState(() => _cart.removeAt(index)); 
                     Navigator.pop(context);
                   },
-                  child: const Text("Remove Item", style: TextStyle(color: Colors.red)),
+                  child: const Text("Remove", style: TextStyle(color: Colors.red)),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: _greenBtn),
@@ -158,7 +168,7 @@ class _PosScreenState extends State<PosScreen> {
                     });
                     Navigator.pop(context);
                   },
-                  child: const Text("Save Changes", style: TextStyle(color: Colors.white)),
+                  child: const Text("Save", style: TextStyle(color: Colors.white)),
                 )
               ],
             );
@@ -190,9 +200,8 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    // Check if number is taken before paying (Safety check)
     if (_unavailableNumbers.contains(_selectedWaitingNumber)) {
-       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("That number is already taken! Pick another."), backgroundColor: Colors.red));
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("That number is already taken!"), backgroundColor: Colors.red));
        return;
     }
 
@@ -207,10 +216,11 @@ class _PosScreenState extends State<PosScreen> {
         _selectedWaitingNumber = null;
         _waitingNumberController.clear();
       });
-      // No need to fetch manually anymore, the listener handles it!
+      // The listener will automatically handle updating the busy numbers
     }
   }
 
+  // --- DRAWER ---
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -315,7 +325,7 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ),
 
-          // --- RIGHT: CART ---
+          // --- RIGHT: CART & WAITING NUMBERS ---
           Expanded(
             flex: 4,
             child: Container(
@@ -342,14 +352,18 @@ class _PosScreenState extends State<PosScreen> {
                             OutlinedButton(onPressed: _autoPickNumber, child: const Text("Auto Pick"))
                           ],
                         ),
-                        // THE LIVE BUSY LIST
+                        
+                        // --- HERE IS THE MISSING BUSY INDICATOR ---
                         if (_unavailableNumbers.isNotEmpty) ...[
                           const SizedBox(height: 8),
+                          const Text("Busy Numbers (Kitchen Active):", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          const SizedBox(height: 4),
                           Text(
-                            "Busy: ${_unavailableNumbers.join(', ')}",
-                            style: const TextStyle(color: Colors.red, fontSize: 12),
+                            _unavailableNumbers.join(', '),
+                            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14),
                           ),
                         ]
+                        // ------------------------------------------
                       ],
                     ),
                   ),
@@ -363,7 +377,7 @@ class _PosScreenState extends State<PosScreen> {
                       itemBuilder: (context, index) {
                         final item = _cart[index];
                         return ListTile(
-                          onTap: () => _editCartItem(index), // Edit on tap
+                          onTap: () => _editCartItem(index), 
                           title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
                           subtitle: item['notes'] != '' ? Text(item['notes'], style: const TextStyle(color: Colors.blue, fontSize: 12)) : null,
                           trailing: Text("RM ${(item['price'] * item['qty']).toStringAsFixed(2)}"),
