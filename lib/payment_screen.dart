@@ -94,16 +94,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Dark Theme Colors
-    const bgColor = Color(0xFF2D2D2D);
-    const cardColor = Color(0xFF3D3D3D);
-    const textColor = Colors.white;
+    // --- LIGHT THEME COLORS ---
+    const bgColor = Colors.white;
+    final cardColor = Colors.grey.shade100; // Very light grey for buttons
+    const textColor = Colors.black;
+    final dividerColor = Colors.grey.shade300;
 
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: bgColor,
-        title: const Text("Payment", style: TextStyle(color: textColor)),
+        elevation: 0,
+        // Title and Icon are black to be visible on white
+        title: const Text("Payment", style: TextStyle(color: textColor, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: textColor),
       ),
       body: Row(
@@ -113,20 +116,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
             flex: 4,
             child: Container(
               padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                border: Border(right: BorderSide(color: Colors.white24)),
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: dividerColor)),
               ),
               child: Column(
                 children: [
                   Text("Waiting No: ${widget.waitingNumber}", style: const TextStyle(color: Colors.orange, fontSize: 24, fontWeight: FontWeight.bold)),
-                  const Divider(color: Colors.white24),
+                  Divider(color: dividerColor),
                   Expanded(
                     child: ListView.builder(
                       itemCount: widget.cart.length,
                       itemBuilder: (context, index) {
                         final item = widget.cart[index];
                         return ListTile(
-                          title: Text(item['name'], style: const TextStyle(color: textColor)),
+                          title: Text(item['name'], style: const TextStyle(color: textColor, fontWeight: FontWeight.bold)),
                           subtitle: item['notes'] != null && item['notes'].isNotEmpty 
                               ? Text("Note: ${item['notes']}", style: const TextStyle(color: Colors.grey)) 
                               : null,
@@ -136,7 +139,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       },
                     ),
                   ),
-                  const Divider(color: Colors.white24),
+                  Divider(color: dividerColor),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -181,7 +184,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             labelStyle: TextStyle(color: Colors.grey),
                             prefixText: "RM ",
                             prefixStyle: TextStyle(color: textColor, fontSize: 24),
-                            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white54)),
+                            // Line color for white background
+                            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.blueGrey, width: 2)),
                           ),
                         ),
                       ),
@@ -194,10 +199,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           onPressed: _isLoading ? null : () => _finalizeOrder('cash'), // Sends 'cash'
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.blueGrey,
+                            foregroundColor: Colors.white, // Text color
                           ),
                           child: _isLoading 
                             ? const CircularProgressIndicator(color: Colors.white) 
-                            : const Text("CHARGE", style: TextStyle(fontSize: 16, color: Colors.white)),
+                            : const Text("CHARGE", style: TextStyle(fontSize: 16)),
                         ),
                       ),
                     ],
@@ -210,11 +216,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     children: [5.0, 10.0, 50.0, 100.0].map((amount) {
                       return ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: cardColor,
+                          backgroundColor: cardColor, // Light Grey
+                          foregroundColor: textColor, // Black text
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: BorderSide(color: dividerColor) // Subtle border
+                          ),
                           padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 25),
                         ),
                         onPressed: () => _addCash(amount),
-                        child: Text("RM ${amount.toInt()}", style: const TextStyle(color: textColor)),
+                        child: Text("RM ${amount.toInt()}"),
                       );
                     }).toList(),
                   ),
@@ -233,20 +245,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   
                   const Spacer(),
 
-                  // CARD BUTTON (Full Width at Bottom)
+                  // QR PAYMENT BUTTON (Full Width at Bottom)
                   SizedBox(
                     height: 60,
                     child: ElevatedButton.icon(
                       onPressed: _isLoading ? null : () => _finalizeOrder('card'), // Sends 'card'
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white10,
+                        backgroundColor: Colors.black87, // Dark background for contrast
+                        foregroundColor: Colors.white, // White text
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
-                          side: const BorderSide(color: Colors.white24)
                         )
                       ),
-                      icon: const Icon(Icons.credit_card, color: Colors.white),
-                      label: const Text("QR PAYMENT", style: TextStyle(fontSize: 20, color: Colors.white)),
+                      icon: const Icon(Icons.qr_code, color: Colors.white),
+                      label: const Text("QR PAYMENT", style: TextStyle(fontSize: 20)),
                     ),
                   ),
                 ],

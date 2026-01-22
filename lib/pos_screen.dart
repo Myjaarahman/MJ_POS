@@ -82,7 +82,7 @@ class _PosScreenState extends State<PosScreen> {
               // Filter: Only show numbers for 'pending' or 'cooking' orders.
               // 'completed' orders will be automatically removed from this list.
               _unavailableNumbers = data
-                  .where((order) => order['status'] == 'pending' || order['status'] == 'cooking')
+                  .where((order) => order['status'] == 'pending' || order['status'] == 'cooking' ||order['status'] == 'ready')
                   .map((order) => order['waiting_number'] as int)
                   .toList()
                   ..sort(); 
