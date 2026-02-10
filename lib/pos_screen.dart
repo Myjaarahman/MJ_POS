@@ -25,7 +25,7 @@ class _PosScreenState extends State<PosScreen> {
   List<int> _unavailableNumbers = []; 
   StreamSubscription? _orderSubscription; 
 
-  // --- CATEGORY VARIABLES (NEW) ---
+  // --- CATEGORY VARIABLES ---
   List<Map<String, dynamic>> _categories = [];
   int? _selectedCategoryId; // Null = "All Items"
   String _selectedCategoryName = "All items";
@@ -46,7 +46,7 @@ class _PosScreenState extends State<PosScreen> {
     super.initState();
     _subscribeToOrders(); 
     _fetchBusinessInfo();
-    _fetchCategories(); // <--- Load categories on startup
+    _fetchCategories(); 
   }
 
   @override
@@ -55,7 +55,6 @@ class _PosScreenState extends State<PosScreen> {
     super.dispose();
   }
 
-  // 1. Fetch Categories for the Dropdown
   Future<void> _fetchCategories() async {
     try {
       final response = await supabase.from('categories').select().order('name');
@@ -69,14 +68,10 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  // 2. Helper to filter products
   Stream<List<Map<String, dynamic>>> _getProductsStream() {
-    // If "All items" is selected, return everything
     if (_selectedCategoryId == null) {
       return supabase.from('products').stream(primaryKey: ['id']).order('name');
-    } 
-    // Otherwise, filter by category_id
-    else {
+    } else {
       return supabase
           .from('products')
           .stream(primaryKey: ['id'])
@@ -303,14 +298,18 @@ class _PosScreenState extends State<PosScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,
+        // Make the leading icon a bit bolder
         leading: IconButton(
-          icon: const Icon(Icons.menu, color: Colors.black),
+          icon: const Icon(Icons.menu, color: Colors.black87),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
         
-        // --- 3. THE DROPDOWN BUTTON ---
+        // --- IMPROVED DROPDOWN UI ---
         title: PopupMenuButton<int?>(
-          // This creates the dropdown menu
+          offset: const Offset(0, 50), // Drop it down slightly so it doesn't cover the bar
+          elevation: 4,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), // Rounded Menu
+          color: Colors.white,
           onSelected: (int? categoryId) {
             setState(() {
               _selectedCategoryId = categoryId;
@@ -325,26 +324,47 @@ class _PosScreenState extends State<PosScreen> {
           itemBuilder: (context) {
             List<PopupMenuEntry<int?>> list = [];
             // "All Items" Option
-            list.add(const PopupMenuItem(value: null, child: Text("All items")));
+            list.add(const PopupMenuItem(
+              value: null, 
+              child: Text("All items", style: TextStyle(fontWeight: FontWeight.bold)),
+            ));
+            list.add(const PopupMenuDivider());
             // Categories from DB
             for (var cat in _categories) {
               list.add(PopupMenuItem(value: cat['id'], child: Text(cat['name'])));
             }
             return list;
           },
-          // The visual Button in the AppBar
-          child: Row(
-            children: [
-              Text(_selectedCategoryName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-              const Icon(Icons.arrow_drop_down, color: Colors.black),
-            ],
+          
+          // --- THE STYLED BUTTON ---
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100, // Light background
+              borderRadius: BorderRadius.circular(30), // Pill Shape
+              border: Border.all(color: Colors.grey.shade300), // Subtle border
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min, // Don't stretch to full width
+              children: [
+                Icon(Icons.filter_list_alt, size: 18, color: Colors.grey.shade700), // Filter Icon
+                const SizedBox(width: 8),
+                Text(
+                  _selectedCategoryName,
+                  style: TextStyle(
+                    color: Colors.grey.shade900, 
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade700),
+              ],
+            ),
           ),
         ),
         // ------------------------------
 
-        actions: [
-          const Spacer(),
-        ],
       ),
       body: Row(
         children: [
@@ -353,19 +373,32 @@ class _PosScreenState extends State<PosScreen> {
             flex: 6,
             child: Container(
               color: _lightGrey,
-              // --- 4. USE FILTERED STREAM ---
               child: StreamBuilder<List<Map<String, dynamic>>>(
-                stream: _getProductsStream(), // Now uses the category filter
+                stream: _getProductsStream(),
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
                   final products = snapshot.data!;
                   
-                  if (products.isEmpty) return const Center(child: Text("No items in this category"));
+                  if (products.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.restaurant_menu, size: 60, color: Colors.grey.shade400),
+                          const SizedBox(height: 10),
+                          Text("No items found in this category", style: TextStyle(color: Colors.grey.shade600)),
+                        ],
+                      ),
+                    );
+                  }
 
                   return GridView.builder(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(16),
                     gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 180, childAspectRatio: 1.0, crossAxisSpacing: 10, mainAxisSpacing: 10,
+                      maxCrossAxisExtent: 200, 
+                      childAspectRatio: 0.85, 
+                      crossAxisSpacing: 16, 
+                      mainAxisSpacing: 16,
                     ),
                     itemCount: products.length,
                     itemBuilder: (context, index) {
@@ -373,11 +406,49 @@ class _PosScreenState extends State<PosScreen> {
                       return GestureDetector(
                         onTap: () => _addToCart(product),
                         child: Container(
-                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)]),
-                          child: Stack(
+                          decoration: BoxDecoration(
+                            color: Colors.white, 
+                            borderRadius: BorderRadius.circular(12), 
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))
+                            ]
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Center(child: Text(product['name'], textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
-                              Positioned(bottom: 8, right: 8, child: Text("RM ${product['price']}", style: const TextStyle(color: Colors.grey, fontSize: 12))),
+                              Expanded(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade50,
+                                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      product['name'][0], // Initials as placeholder
+                                      style: TextStyle(fontSize: 40, color: Colors.grey.shade300, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.all(12.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      product['name'], 
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      "RM ${product['price']}", 
+                                      style: TextStyle(color: _greenBtn, fontWeight: FontWeight.bold, fontSize: 14),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -397,7 +468,7 @@ class _PosScreenState extends State<PosScreen> {
               child: Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(16),
                     color: Colors.white,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -407,20 +478,37 @@ class _PosScreenState extends State<PosScreen> {
                             Expanded(
                               child: TextField(
                                 controller: _waitingNumberController,
-                                decoration: const InputDecoration(labelText: "Waiting No.", border: OutlineInputBorder(), isDense: true),
+                                decoration: const InputDecoration(
+                                  labelText: "Waiting No.", 
+                                  border: OutlineInputBorder(), 
+                                  isDense: true,
+                                  prefixIcon: Icon(Icons.confirmation_number)
+                                ),
                                 keyboardType: TextInputType.number,
                                 onChanged: (val) => setState(() => _selectedWaitingNumber = int.tryParse(val)),
                               ),
                             ),
                             const SizedBox(width: 8),
-                            OutlinedButton(onPressed: _autoPickNumber, child: const Text("Auto Pick"))
+                            OutlinedButton.icon(
+                              onPressed: _autoPickNumber, 
+                              icon: const Icon(Icons.autorenew),
+                              label: const Text("Auto")
+                            )
                           ],
                         ),
                         if (_unavailableNumbers.isNotEmpty) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              const Icon(Icons.circle, size: 10, color: Colors.red),
+                              const SizedBox(width: 5),
+                              Text("Busy in Kitchen: ", style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
                           Text(
-                            "Busy: ${_unavailableNumbers.join(', ')}",
-                            style: const TextStyle(color: Colors.red, fontSize: 12),
+                            _unavailableNumbers.join(', '),
+                            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14),
                           ),
                         ]
                       ],
@@ -429,7 +517,16 @@ class _PosScreenState extends State<PosScreen> {
                   const Divider(height: 1),
                   Expanded(
                     child: _cart.isEmpty 
-                    ? const Center(child: Text("No items selected", style: TextStyle(color: Colors.grey)))
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.shopping_cart_outlined, size: 48, color: Colors.grey.shade300),
+                            const SizedBox(height: 10),
+                            Text("Cart is empty", style: TextStyle(color: Colors.grey.shade400)),
+                          ],
+                        ),
+                      )
                     : ListView.separated(
                       itemCount: _cart.length,
                       separatorBuilder: (_,__) => const Divider(height: 1),
@@ -438,33 +535,51 @@ class _PosScreenState extends State<PosScreen> {
                         return ListTile(
                           onTap: () => _editCartItem(index), 
                           title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: item['notes'] != '' ? Text(item['notes'], style: const TextStyle(color: Colors.blue, fontSize: 12)) : null,
-                          trailing: Text("RM ${(item['price'] * item['qty']).toStringAsFixed(2)}"),
-                          leading: CircleAvatar(backgroundColor: Colors.grey[200], child: Text("${item['qty']}", style: const TextStyle(color: Colors.black))),
+                          subtitle: item['notes'] != '' 
+                            ? Text(item['notes'], style: const TextStyle(color: Colors.blue, fontSize: 12)) 
+                            : null,
+                          trailing: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text("RM ${(item['price'] * item['qty']).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                          leading: CircleAvatar(
+                            backgroundColor: Colors.grey.shade100, 
+                            child: Text("${item['qty']}", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold))
+                          ),
                         );
                       },
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.all(16),
-                    color: Colors.white,
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -4))]
+                    ),
                     child: Column(
                       children: [
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text("Total", style: TextStyle(fontSize: 16)),
-                            Text("RM ${_totalAmount.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                            Text("Total", style: TextStyle(fontSize: 18, color: Colors.grey.shade600)),
+                            Text("RM ${_totalAmount.toStringAsFixed(2)}", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
                           ],
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 16),
                         SizedBox(
                           width: double.infinity,
-                          height: 50,
+                          height: 56,
                           child: ElevatedButton(
                             onPressed: _goToPayment,
-                            style: ElevatedButton.styleFrom(backgroundColor: _greenBtn),
-                            child: const Text("CHARGE", style: TextStyle(color: Colors.white, fontSize: 18)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _greenBtn,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              elevation: 2,
+                            ),
+                            child: const Text("CHARGE", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1)),
                           ),
                         ),
                       ],

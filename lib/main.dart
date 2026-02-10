@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'login_screen.dart'; 
-import 'pos_screen.dart'; // Directs to Cashier Station (or swap for HomeScreen)
+import 'pos_screen.dart'; 
 
 // Imports from your other files
 import 'add_product_screen.dart'; 
@@ -31,19 +31,16 @@ class MyApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFF5F5F5),
         useMaterial3: true,
       ),
-      // THE GATEKEEPER IS BACK (Fixed)
       home: StreamBuilder<AuthState>(
         stream: Supabase.instance.client.auth.onAuthStateChange,
         builder: (context, snapshot) {
-          // 1. INSTANT CHECK: Do we already have a session?
-          // This prevents the "Login every time" issue by checking memory first.
-          final session = Supabase.instance.client.auth.currentSession;
+          final session = snapshot.data?.session;
+
           
           if (session != null) {
-            return const HomeScreen(); // <--- GO STRAIGHT HOME
+            return const HomeScreen(); 
           }
 
-          // 2. If no session, show Login
           return const LoginScreen();
         },
       ),
@@ -67,19 +64,42 @@ class _HomeScreenState extends State<HomeScreen> {
     _getCafeName();
   }
 
+  // --- UPDATED FETCH LOGIC ---
   Future<void> _getCafeName() async {
     try {
       final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
       if (user == null) return;
 
-      final profile = await supabase.from('profiles').select('business_id').eq('id', user.id).single();
+      // 1. Get Profile safely (use maybeSingle to avoid crashes)
+      final profile = await supabase
+          .from('profiles')
+          .select('business_id')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (profile == null || profile['business_id'] == null) {
+        debugPrint("Profile not found or No Business ID assigned.");
+        if (mounted) setState(() => _cafeName = "");
+        return;
+      }
+
       final businessId = profile['business_id'];
 
-      final business = await supabase.from('businesses').select('name').eq('id', businessId).single();
+      // 2. Get Business Name safely
+      final business = await supabase
+          .from('businesses')
+          .select('name')
+          .eq('id', businessId)
+          .maybeSingle();
 
-      if (mounted) setState(() => _cafeName = business['name']);
+      if (business != null && mounted) {
+        setState(() => _cafeName = business['name']);
+      } else {
+        if (mounted) setState(() => _cafeName = "Dashboard");
+      }
     } catch (e) {
+      debugPrint("Error fetching cafe name: $e"); // Check your console for this error!
       if (mounted) setState(() => _cafeName = "Dashboard");
     }
   }
@@ -95,7 +115,6 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.logout),
             onPressed: () async {
               await Supabase.instance.client.auth.signOut();
-              // The StreamBuilder in MyApp handles the redirect to Login automatically!
             },
           )
         ],
