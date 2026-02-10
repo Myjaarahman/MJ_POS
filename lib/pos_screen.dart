@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'dart:async'; // Needed for the stream subscription
+import 'dart:async'; 
 import 'payment_screen.dart'; 
 import 'add_product_screen.dart';
 import 'receipts_screen.dart';
@@ -23,7 +23,12 @@ class _PosScreenState extends State<PosScreen> {
   
   // Real-Time Busy Numbers
   List<int> _unavailableNumbers = []; 
-  StreamSubscription? _orderSubscription; // To manage the listener
+  StreamSubscription? _orderSubscription; 
+
+  // --- CATEGORY VARIABLES (NEW) ---
+  List<Map<String, dynamic>> _categories = [];
+  int? _selectedCategoryId; // Null = "All Items"
+  String _selectedCategoryName = "All items";
 
   final TextEditingController _waitingNumberController = TextEditingController();
   
@@ -39,14 +44,45 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void initState() {
     super.initState();
-    _subscribeToOrders(); // Start listening immediately
-    _fetchBusinessInfo(); 
+    _subscribeToOrders(); 
+    _fetchBusinessInfo();
+    _fetchCategories(); // <--- Load categories on startup
   }
 
   @override
   void dispose() {
-    _orderSubscription?.cancel(); // Stop listening when screen closes
+    _orderSubscription?.cancel();
     super.dispose();
+  }
+
+  // 1. Fetch Categories for the Dropdown
+  Future<void> _fetchCategories() async {
+    try {
+      final response = await supabase.from('categories').select().order('name');
+      if (mounted) {
+        setState(() {
+          _categories = List<Map<String, dynamic>>.from(response);
+        });
+      }
+    } catch (e) {
+      debugPrint("Error fetching categories: $e");
+    }
+  }
+
+  // 2. Helper to filter products
+  Stream<List<Map<String, dynamic>>> _getProductsStream() {
+    // If "All items" is selected, return everything
+    if (_selectedCategoryId == null) {
+      return supabase.from('products').stream(primaryKey: ['id']).order('name');
+    } 
+    // Otherwise, filter by category_id
+    else {
+      return supabase
+          .from('products')
+          .stream(primaryKey: ['id'])
+          .eq('category_id', _selectedCategoryId!)
+          .order('name');
+    }
   }
 
   Future<void> _fetchBusinessInfo() async {
@@ -70,19 +106,15 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  // --- THE REAL-TIME LISTENER ---
   void _subscribeToOrders() {
-    // This stream listens to the 'orders' table 24/7
     _orderSubscription = supabase
         .from('orders')
         .stream(primaryKey: ['id'])
         .listen((data) {
           if (mounted) {
             setState(() {
-              // Filter: Only show numbers for 'pending' or 'cooking' orders.
-              // 'completed' orders will be automatically removed from this list.
               _unavailableNumbers = data
-                  .where((order) => order['status'] == 'pending' || order['status'] == 'cooking' ||order['status'] == 'ready')
+                  .where((order) => order['status'] == 'pending' || order['status'] == 'cooking' || order['status'] == 'ready')
                   .map((order) => order['waiting_number'] as int)
                   .toList()
                   ..sort(); 
@@ -108,7 +140,6 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  // Edit Cart Dialog
   void _editCartItem(int index) {
     final item = _cart[index];
     final noteCtrl = TextEditingController(text: item['notes']);
@@ -145,7 +176,7 @@ class _PosScreenState extends State<PosScreen> {
                   TextField(
                     controller: noteCtrl,
                     decoration: const InputDecoration(
-                      labelText: "Special Instruction",
+                      labelText: "Special Instruction (e.g. No Sugar)",
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -157,7 +188,7 @@ class _PosScreenState extends State<PosScreen> {
                     setState(() => _cart.removeAt(index)); 
                     Navigator.pop(context);
                   },
-                  child: const Text("Remove", style: TextStyle(color: Colors.red)),
+                  child: const Text("Remove Item", style: TextStyle(color: Colors.red)),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: _greenBtn),
@@ -168,7 +199,7 @@ class _PosScreenState extends State<PosScreen> {
                     });
                     Navigator.pop(context);
                   },
-                  child: const Text("Save", style: TextStyle(color: Colors.white)),
+                  child: const Text("Save Changes", style: TextStyle(color: Colors.white)),
                 )
               ],
             );
@@ -201,7 +232,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     if (_unavailableNumbers.contains(_selectedWaitingNumber)) {
-       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("That number is already taken!"), backgroundColor: Colors.red));
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("That number is already taken! Pick another."), backgroundColor: Colors.red));
        return;
     }
 
@@ -216,11 +247,9 @@ class _PosScreenState extends State<PosScreen> {
         _selectedWaitingNumber = null;
         _waitingNumberController.clear();
       });
-      // The listener will automatically handle updating the busy numbers
     }
   }
 
-  // --- DRAWER ---
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -278,13 +307,44 @@ class _PosScreenState extends State<PosScreen> {
           icon: const Icon(Icons.menu, color: Colors.black),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
-        title: Row(
-          children: [
-            const Text("All items", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-            const Icon(Icons.arrow_drop_down, color: Colors.black),
-            const Spacer(),
-          ],
+        
+        // --- 3. THE DROPDOWN BUTTON ---
+        title: PopupMenuButton<int?>(
+          // This creates the dropdown menu
+          onSelected: (int? categoryId) {
+            setState(() {
+              _selectedCategoryId = categoryId;
+              if (categoryId == null) {
+                _selectedCategoryName = "All items";
+              } else {
+                final cat = _categories.firstWhere((e) => e['id'] == categoryId);
+                _selectedCategoryName = cat['name'];
+              }
+            });
+          },
+          itemBuilder: (context) {
+            List<PopupMenuEntry<int?>> list = [];
+            // "All Items" Option
+            list.add(const PopupMenuItem(value: null, child: Text("All items")));
+            // Categories from DB
+            for (var cat in _categories) {
+              list.add(PopupMenuItem(value: cat['id'], child: Text(cat['name'])));
+            }
+            return list;
+          },
+          // The visual Button in the AppBar
+          child: Row(
+            children: [
+              Text(_selectedCategoryName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              const Icon(Icons.arrow_drop_down, color: Colors.black),
+            ],
+          ),
         ),
+        // ------------------------------
+
+        actions: [
+          const Spacer(),
+        ],
       ),
       body: Row(
         children: [
@@ -293,11 +353,15 @@ class _PosScreenState extends State<PosScreen> {
             flex: 6,
             child: Container(
               color: _lightGrey,
+              // --- 4. USE FILTERED STREAM ---
               child: StreamBuilder<List<Map<String, dynamic>>>(
-                stream: supabase.from('products').stream(primaryKey: ['id']),
+                stream: _getProductsStream(), // Now uses the category filter
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
                   final products = snapshot.data!;
+                  
+                  if (products.isEmpty) return const Center(child: Text("No items in this category"));
+
                   return GridView.builder(
                     padding: const EdgeInsets.all(12),
                     gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -352,18 +416,13 @@ class _PosScreenState extends State<PosScreen> {
                             OutlinedButton(onPressed: _autoPickNumber, child: const Text("Auto Pick"))
                           ],
                         ),
-                        
-                        // --- HERE IS THE MISSING BUSY INDICATOR ---
                         if (_unavailableNumbers.isNotEmpty) ...[
                           const SizedBox(height: 8),
-                          const Text("Busy Numbers (Kitchen Active):", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          const SizedBox(height: 4),
                           Text(
-                            _unavailableNumbers.join(', '),
-                            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14),
+                            "Busy: ${_unavailableNumbers.join(', ')}",
+                            style: const TextStyle(color: Colors.red, fontSize: 12),
                           ),
                         ]
-                        // ------------------------------------------
                       ],
                     ),
                   ),
