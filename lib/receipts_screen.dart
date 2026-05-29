@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:intl/intl.dart'; // You might need to add intl package to pubspec.yaml
+import 'package:intl/intl.dart'; 
+import 'printer_service.dart';
 
 class ReceiptsScreen extends StatefulWidget {
   const ReceiptsScreen({super.key});
@@ -14,6 +15,41 @@ class _ReceiptsScreenState extends State<ReceiptsScreen> {
   Map<String, dynamic>? _selectedOrder;
   List<Map<String, dynamic>> _orderItems = [];
   bool _isLoadingDetails = false;
+
+  // --- NEW: REPRINT RECEIPT LOGIC ---
+  Future<void> _reprintReceipt() async {
+    if (_selectedOrder == null) return;
+
+    // We need to map the database column names back to what the printer expects (name, qty, price)
+    List<Map<String, dynamic>> mappedCart = _orderItems.map((item) {
+      return {
+        'name': item['product_name'],
+        'qty': item['quantity'],
+        'price': item['price_at_sale'],
+        'notes': item['notes'] ?? '', 
+      };
+    }).toList();
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Sending to printer..."), duration: Duration(seconds: 1)),
+      );
+
+      await PrinterService().printOrderReceipt(
+        cart: mappedCart,
+        total: (_selectedOrder!['total_amount'] as num).toDouble(),
+        waitingNumber: _selectedOrder!['waiting_number'],
+        paymentMethod: _selectedOrder!['payment_method'],
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Printer Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+  // ----------------------------------
 
   // Fetch Items when an order is clicked
   Future<void> _fetchOrderDetails(Map<String, dynamic> order) async {
@@ -127,7 +163,7 @@ class _ReceiptsScreenState extends State<ReceiptsScreen> {
                           child: Container(
                             constraints: const BoxConstraints(maxWidth: 400),
                             padding: const EdgeInsets.all(24),
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                               color: Colors.white,
                               boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
                             ),
@@ -193,6 +229,26 @@ class _ReceiptsScreenState extends State<ReceiptsScreen> {
                                     Text("RM ${_selectedOrder!['total_amount']}", style: const TextStyle(color: Colors.grey)),
                                   ],
                                 ),
+                                
+                                // --- NEW: REPRINT BUTTON ---
+                                const SizedBox(height: 30),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: ElevatedButton.icon(
+                                    icon: const Icon(Icons.print),
+                                    label: const Text("Reprint Receipt", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.blue.shade700,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8)
+                                      )
+                                    ),
+                                    onPressed: _reprintReceipt,
+                                  ),
+                                ),
+                                // ---------------------------
                               ],
                             ),
                           ),

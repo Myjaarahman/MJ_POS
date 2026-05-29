@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Required to connect to the BLE thermal receipt printer.</string>
+<key>NSBluetoothPeripheralUsageDescription</key>
+<string>Required to communicate with the POS hardware.</string>
 </dict>
 </plist>

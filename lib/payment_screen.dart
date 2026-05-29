@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'printer_service.dart';
 
 class PaymentScreen extends StatefulWidget {
   final List<Map<String, dynamic>> cart;
@@ -71,14 +72,57 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
 
       if (mounted) {
-        Navigator.of(context).pop(true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Paid via ${paymentType.toUpperCase()} - Sent to Kitchen!"), 
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
+        // --- NEW: ASK BEFORE PRINTING ---
+        bool? wantReceipt = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false, 
+          builder: (context) => AlertDialog(
+            backgroundColor: Colors.white,
+            title: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green),
+                SizedBox(width: 10),
+                Text("Payment Successful"),
+              ],
+            ),
+            content: const Text("Would the customer like a printed receipt?"),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text("No Receipt", style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text("Print Receipt", style: TextStyle(color: Colors.white)),
+              ),
+            ],
           ),
         );
+
+        if (wantReceipt == true) {
+          // Trigger printer only if they clicked 'Print Receipt'
+          PrinterService().printOrderReceipt(
+            cart: widget.cart,
+            total: widget.totalAmount,
+            waitingNumber: widget.waitingNumber,
+            paymentMethod: paymentType,
+          ).catchError((e) {
+            print("Printer error: $e"); 
+          });
+        }
+        // --------------------------------
+
+        if (mounted) {
+          Navigator.of(context).pop(true); // Go back to the main POS screen
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Paid via ${paymentType.toUpperCase()} - Sent to Kitchen!"), 
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

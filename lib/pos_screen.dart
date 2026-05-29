@@ -5,6 +5,7 @@ import 'payment_screen.dart';
 import 'add_product_screen.dart';
 import 'receipts_screen.dart';
 import 'kitchen_screen.dart'; 
+import 'printer_service.dart'; 
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -17,29 +18,29 @@ class _PosScreenState extends State<PosScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Data Variables
+  // --- DATA VARIABLES ---
   List<Map<String, dynamic>> _cart = [];
   int? _selectedWaitingNumber;
+  final TextEditingController _waitingNumberController = TextEditingController();
   
-  // Real-Time Busy Numbers
+  // Real-Time Orders & Busy Numbers
+  List<Map<String, dynamic>> _activeOrders = [];
   List<int> _unavailableNumbers = []; 
   StreamSubscription? _orderSubscription; 
 
   // --- CATEGORY VARIABLES ---
   List<Map<String, dynamic>> _categories = [];
-  int? _selectedCategoryId; // Null = "All Items"
+  int? _selectedCategoryId; 
   String _selectedCategoryName = "All items";
-
-  final TextEditingController _waitingNumberController = TextEditingController();
   
   // Business Info
   String _businessName = "Loading...";
   String _role = "Cashier"; 
 
-  // --- WHITE THEME COLORS ---
-  final Color _bg = Colors.white;
-  final Color _greenBtn = const Color(0xFF4CAF50);
-  final Color _lightGrey = const Color(0xFFF5F5F5);
+  // --- THEME COLORS ---
+  final Color _brandBrown = const Color(0xFFC05A17); 
+  final Color _bgBeige = const Color(0xFFFDF8EE); 
+  final Color _cardWhite = Colors.white;
 
   @override
   void initState() {
@@ -52,6 +53,7 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void dispose() {
     _orderSubscription?.cancel();
+    _waitingNumberController.dispose();
     super.dispose();
   }
 
@@ -107,15 +109,146 @@ class _PosScreenState extends State<PosScreen> {
         .stream(primaryKey: ['id'])
         .listen((data) {
           if (mounted) {
+            final active = data.where((o) => o['status'] == 'pending' || o['status'] == 'cooking' || o['status'] == 'ready').toList();
+            // Sort to show the oldest active orders at the top
+            active.sort((a, b) => DateTime.parse(a['created_at']).compareTo(DateTime.parse(b['created_at'])));
+            
             setState(() {
-              _unavailableNumbers = data
-                  .where((order) => order['status'] == 'pending' || order['status'] == 'cooking' || order['status'] == 'ready')
-                  .map((order) => order['waiting_number'] as int)
-                  .toList()
-                  ..sort(); 
+              _activeOrders = active;
+              _unavailableNumbers = active.map((order) => order['waiting_number'] as int).toList()..sort(); 
             });
           }
         });
+  }
+
+  // --- UPDATED: ACTIVE ORDER DETAILS & PRINTER LOGIC ---
+  Future<void> _showOrderDetails(Map<String, dynamic> order) async {
+    // 1. Fetch the items for this specific order
+    final response = await supabase.from('order_items').select().eq('order_id', order['id']);
+    final items = List<Map<String, dynamic>>.from(response);
+
+    if (!mounted) return;
+
+    // 2. Show the dialog
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text("Order #${order['waiting_number']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: Colors.orange.shade100, borderRadius: BorderRadius.circular(8)),
+                child: Text(order['status'].toString().toUpperCase(), style: TextStyle(fontSize: 12, color: Colors.orange.shade900, fontWeight: FontWeight.bold)),
+              )
+            ],
+          ),
+          content: SizedBox(
+            width: 350,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: items.length,
+              separatorBuilder: (_, __) => const Divider(),
+              itemBuilder: (context, index) {
+                final item = items[index];
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
+                    child: Text("${item['quantity']}x", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  title: Text(item['product_name'], style: const TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: item['notes'] != null && item['notes'].toString().isNotEmpty
+                      ? Text("Note: ${item['notes']}", style: const TextStyle(color: Colors.red, fontStyle: FontStyle.italic))
+                      : null,
+                );
+              },
+            ),
+          ),
+          actionsAlignment: MainAxisAlignment.spaceBetween, // Spreads buttons out
+          actions: [
+            // --- NEW: PRINTER BUTTON ---
+            OutlinedButton.icon(
+              icon: const Icon(Icons.print, color: Colors.blue),
+              label: const Text("Print", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: Colors.blue.shade200),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
+              ),
+              onPressed: () async {
+                // Map the DB items to match what the printer expects
+                List<Map<String, dynamic>> mappedCart = items.map((item) {
+                  return {
+                    'name': item['product_name'],
+                    'qty': item['quantity'],
+                    'price': item['price_at_sale'],
+                    'notes': item['notes'] ?? '', 
+                  };
+                }).toList();
+
+                try {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Sending to printer..."), duration: Duration(seconds: 1)),
+                  );
+
+                  await PrinterService().printOrderReceipt(
+                    cart: mappedCart,
+                    total: (order['total_amount'] as num).toDouble(),
+                    waitingNumber: order['waiting_number'],
+                    paymentMethod: order['payment_method'] ?? 'cash',
+                  );
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Printer Error: $e'), backgroundColor: Colors.red),
+                    );
+                  }
+                }
+              },
+            ),
+            // ---------------------------
+
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Close", style: TextStyle(color: Colors.grey)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.check_circle),
+                  label: const Text("Clear", style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
+                  ),
+                  onPressed: () async {
+                    try {
+                      await supabase.from('orders').update({'status': 'completed'}).eq('id', order['id']);
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Order cleared!"), backgroundColor: Colors.green));
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+                      }
+                    }
+                  },
+                ),
+              ],
+            )
+          ],
+        );
+      }
+    );
   }
 
   void _addToCart(Map<String, dynamic> product) {
@@ -162,7 +295,7 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                       Text(tempQty.toString(), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                       IconButton(
-                        icon: Icon(Icons.add_circle, color: _greenBtn),
+                        icon: Icon(Icons.add_circle, color: _brandBrown),
                         onPressed: () => setDialogState(() => tempQty++),
                       ),
                     ],
@@ -186,7 +319,7 @@ class _PosScreenState extends State<PosScreen> {
                   child: const Text("Remove Item", style: TextStyle(color: Colors.red)),
                 ),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: _greenBtn),
+                  style: ElevatedButton.styleFrom(backgroundColor: _brandBrown),
                   onPressed: () {
                     setState(() {
                       _cart[index]['qty'] = tempQty;
@@ -204,10 +337,18 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  void _clearCart() {
+    setState(() {
+      _cart.clear();
+      _selectedWaitingNumber = null;
+      _waitingNumberController.clear();
+    });
+  }
+
   double get _totalAmount => _cart.fold(0, (sum, item) => sum + (item['price'] * item['qty']));
 
   void _autoPickNumber() {
-    for (int i = 1; i <= 50; i++) {
+    for (int i = 1; i <= 20; i++) {
       if (!_unavailableNumbers.contains(i)) {
         setState(() {
           _selectedWaitingNumber = i;
@@ -216,7 +357,15 @@ class _PosScreenState extends State<PosScreen> {
         return;
       }
     }
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("All numbers 1-50 are full!")));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("All numbers 1-20 are full!")));
+  }
+
+  String _getAvailableNumbersString() {
+    List<int> available = [];
+    for (int i = 1; i <= 20; i++) {
+      if (!_unavailableNumbers.contains(i)) available.add(i);
+    }
+    return available.join(', ');
   }
 
   void _goToPayment() async {
@@ -237,14 +386,11 @@ class _PosScreenState extends State<PosScreen> {
     );
 
     if (paymentSuccess == true) {
-      setState(() {
-        _cart.clear();
-        _selectedWaitingNumber = null;
-        _waitingNumberController.clear();
-      });
+      _clearCart();
     }
   }
 
+  // --- DRAWER ---
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -252,40 +398,54 @@ class _PosScreenState extends State<PosScreen> {
         padding: EdgeInsets.zero,
         children: [
           UserAccountsDrawerHeader(
-            decoration: const BoxDecoration(color: Colors.white),
-            accountName: Text(_businessName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
-            accountEmail: Text("POS 1 • $_role", style: const TextStyle(color: Colors.grey)),
-            currentAccountPicture: const CircleAvatar(backgroundColor: Colors.indigo, child: Icon(Icons.store, color: Colors.white)),
+            decoration: BoxDecoration(color: _brandBrown),
+            accountName: Text(_businessName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+            accountEmail: Text("POS Station • $_role", style: const TextStyle(color: Colors.white70)),
+            currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.store, color: Colors.brown)),
           ),
-          _buildDrawerItem(Icons.point_of_sale, "Sales", onTap: () => Navigator.pop(context)),
-          _buildDrawerItem(Icons.receipt_long, "Receipts", onTap: () {
-            Navigator.pop(context);
-            Navigator.push(context, MaterialPageRoute(builder: (_) => ReceiptsScreen()));
-          }),
-          _buildDrawerItem(Icons.kitchen, "Kitchen Station", onTap: () {
-            Navigator.pop(context);
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const KitchenScreen()));
-          }),
+          ListTile(
+            leading: const Icon(Icons.kitchen, color: Colors.grey),
+            title: const Text("Kitchen Display", style: TextStyle(color: Colors.black)),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const KitchenScreen()));
+            },
+          ),
           const Divider(),
-          _buildDrawerItem(Icons.bar_chart, "Back office", onTap: () {
-            Navigator.pop(context);
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const AddProductScreen()));
-          }),
+          ListTile(
+            leading: const Icon(Icons.inventory, color: Colors.grey),
+            title: const Text("Back Office", style: TextStyle(color: Colors.black)),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const AddProductScreen()));
+            },
+          ),
           const Divider(),
-          _buildDrawerItem(Icons.logout, "Logout", onTap: () async {
-            await supabase.auth.signOut();
-            if (mounted) Navigator.popUntil(context, (route) => route.isFirst);
-          }),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: const Text("Logout", style: TextStyle(color: Colors.red)),
+            onTap: () async {
+              await supabase.auth.signOut();
+              if (mounted) Navigator.popUntil(context, (route) => route.isFirst);
+            },
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildDrawerItem(IconData icon, String title, {VoidCallback? onTap}) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.grey[700]),
-      title: Text(title, style: const TextStyle(color: Colors.black)),
-      onTap: onTap ?? () {},
+  // --- CARD WRAPPER HELPER ---
+  Widget _buildCard({required Widget child}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _cardWhite,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))
+        ],
+        border: Border.all(color: Colors.grey.shade200, width: 1),
+      ),
+      child: child,
     );
   }
 
@@ -293,303 +453,354 @@ class _PosScreenState extends State<PosScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: _bg,
+      backgroundColor: _bgBeige,
       drawer: _buildDrawer(),
+      
+      // --- BRANDED APP BAR ---
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        // Make the leading icon a bit bolder
+        backgroundColor: _brandBrown,
+        elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.menu, color: Colors.black87),
+          icon: const Icon(Icons.menu, color: Colors.white),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
-        
-        // --- IMPROVED DROPDOWN UI ---
-        title: PopupMenuButton<int?>(
-          offset: const Offset(0, 50), // Drop it down slightly so it doesn't cover the bar
-          elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), // Rounded Menu
-          color: Colors.white,
-          onSelected: (int? categoryId) {
-            setState(() {
-              _selectedCategoryId = categoryId;
-              if (categoryId == null) {
-                _selectedCategoryName = "All items";
-              } else {
-                final cat = _categories.firstWhere((e) => e['id'] == categoryId);
-                _selectedCategoryName = cat['name'];
-              }
-            });
-          },
-          itemBuilder: (context) {
-            List<PopupMenuEntry<int?>> list = [];
-            // "All Items" Option
-            list.add(const PopupMenuItem(
-              value: null, 
-              child: Text("All items", style: TextStyle(fontWeight: FontWeight.bold)),
-            ));
-            list.add(const PopupMenuDivider());
-            // Categories from DB
-            for (var cat in _categories) {
-              list.add(PopupMenuItem(value: cat['id'], child: Text(cat['name'])));
-            }
-            return list;
-          },
-          
-          // --- THE STYLED BUTTON ---
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade100, // Light background
-              borderRadius: BorderRadius.circular(30), // Pill Shape
-              border: Border.all(color: Colors.grey.shade300), // Subtle border
+        title: Text("$_businessName ☕", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24, letterSpacing: 1)),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.receipt_long, color: Colors.brown, size: 18),
+              label: const Text("Receipts", style: TextStyle(color: Colors.brown, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const ReceiptsScreen()));
+              },
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min, // Don't stretch to full width
-              children: [
-                Icon(Icons.filter_list_alt, size: 18, color: Colors.grey.shade700), // Filter Icon
-                const SizedBox(width: 8),
-                Text(
-                  _selectedCategoryName,
-                  style: TextStyle(
-                    color: Colors.grey.shade900, 
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16
+          )
+        ],
+      ),
+
+      // --- THREE COLUMN BODY ---
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            
+            // 1. LEFT COLUMN: ACTIVE ORDERS (Flex: 2)
+            Expanded(
+              flex: 2,
+              child: _buildCard(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Active Orders", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: _activeOrders.isEmpty
+                            ? Text("No active orders.", style: TextStyle(color: Colors.grey.shade600))
+                            : ListView.separated(
+                                itemCount: _activeOrders.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                                itemBuilder: (context, index) {
+                                  final order = _activeOrders[index];
+                                  Color statusColor = Colors.orange;
+                                  if (order['status'] == 'ready') statusColor = Colors.green;
+                                  
+                                  return Container(
+                                    padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8, right: 4), // Asymmetrical padding to balance the icon button
+                                    decoration: BoxDecoration(
+                                      color: statusColor.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: statusColor.withOpacity(0.3)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Text("#${order['waiting_number']}", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: statusColor)),
+                                        const Spacer(),
+                                        Text(order['status'].toString().toUpperCase(), style: TextStyle(fontWeight: FontWeight.bold, color: statusColor, fontSize: 12)),
+                                        const SizedBox(width: 4),
+                                        
+                                        // --- THE NEW 3-DOT BUTTON ---
+                                        IconButton(
+                                          icon: Icon(Icons.more_vert, color: statusColor),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(), // Minimizes extra padding around the icon
+                                          onPressed: () => _showOrderDetails(order),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade700),
-              ],
+              ),
             ),
-          ),
-        ),
-        // ------------------------------
+            const SizedBox(width: 16),
 
-      ),
-      body: Row(
-        children: [
-          // --- LEFT: PRODUCT GRID ---
-          Expanded(
-            flex: 6,
-            child: Container(
-              color: _lightGrey,
-              child: StreamBuilder<List<Map<String, dynamic>>>(
-                stream: _getProductsStream(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                  final products = snapshot.data!;
-                  
-                  if (products.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+            // 2. MIDDLE COLUMN: MENU (Flex: 5)
+            Expanded(
+              flex: 5,
+              child: _buildCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header & Category Dropdown
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Icon(Icons.restaurant_menu, size: 60, color: Colors.grey.shade400),
-                          const SizedBox(height: 10),
-                          Text("No items found in this category", style: TextStyle(color: Colors.grey.shade600)),
+                          const Text("Menu", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                          
+                          // Category Filter
+                          PopupMenuButton<int?>(
+                            offset: const Offset(0, 40),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            color: Colors.white,
+                            onSelected: (int? categoryId) {
+                              setState(() {
+                                _selectedCategoryId = categoryId;
+                                _selectedCategoryName = categoryId == null 
+                                    ? "All items" 
+                                    : _categories.firstWhere((e) => e['id'] == categoryId)['name'];
+                              });
+                            },
+                            itemBuilder: (context) {
+                              List<PopupMenuEntry<int?>> list = [
+                                const PopupMenuItem(value: null, child: Text("All items", style: TextStyle(fontWeight: FontWeight.bold))),
+                                const PopupMenuDivider(),
+                              ];
+                              for (var cat in _categories) {
+                                list.add(PopupMenuItem(value: cat['id'], child: Text(cat['name'])));
+                              }
+                              return list;
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade300),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.filter_list, size: 18, color: Colors.grey.shade700),
+                                  const SizedBox(width: 8),
+                                  Text(_selectedCategoryName, style: TextStyle(color: Colors.grey.shade900, fontWeight: FontWeight.w600)),
+                                  const SizedBox(width: 4),
+                                  Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade700),
+                                ],
+                              ),
+                            ),
+                          ),
                         ],
                       ),
-                    );
-                  }
-
-                  return GridView.builder(
-                    padding: const EdgeInsets.all(16),
-                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 200, 
-                      childAspectRatio: 0.85, 
-                      crossAxisSpacing: 16, 
-                      mainAxisSpacing: 16,
                     ),
-                    itemCount: products.length,
-                    itemBuilder: (context, index) {
-                      final product = products[index];
-                      return GestureDetector(
-                        onTap: () => _addToCart(product),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white, 
-                            borderRadius: BorderRadius.circular(12), 
-                            boxShadow: [
-                              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))
-                            ]
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(
+                    const Divider(height: 1),
+                    
+                    // Product Grid
+                    Expanded(
+                      child: StreamBuilder<List<Map<String, dynamic>>>(
+                        stream: _getProductsStream(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                          final products = snapshot.data!;
+                          
+                          if (products.isEmpty) {
+                            return Center(child: Text("No items found.", style: TextStyle(color: Colors.grey.shade500)));
+                          }
+
+                          return GridView.builder(
+                            padding: const EdgeInsets.all(16),
+                            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                              maxCrossAxisExtent: 180, 
+                              childAspectRatio: 0.85, 
+                              crossAxisSpacing: 16, 
+                              mainAxisSpacing: 16,
+                            ),
+                            itemCount: products.length,
+                            itemBuilder: (context, index) {
+                              final product = products[index];
+                              return GestureDetector(
+                                onTap: () => _addToCart(product),
                                 child: Container(
                                   decoration: BoxDecoration(
-                                    color: Colors.grey.shade50,
-                                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                                    color: Colors.white, 
+                                    borderRadius: BorderRadius.circular(8), 
+                                    border: Border.all(color: Colors.grey.shade200),
+                                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))],
                                   ),
-                                  child: Center(
-                                    child: Text(
-                                      product['name'][0], // Initials as placeholder
-                                      style: TextStyle(fontSize: 40, color: Colors.grey.shade300, fontWeight: FontWeight.bold),
-                                    ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: _bgBeige,
+                                            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+                                          ),
+                                          child: Center(
+                                            child: Icon(Icons.fastfood, size: 40, color: Colors.grey.shade300),
+                                          ),
+                                        ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.all(12.0),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(product['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis),
+                                            const SizedBox(height: 4),
+                                            Text("RM ${product['price']}", style: TextStyle(color: _brandBrown, fontWeight: FontWeight.bold, fontSize: 14)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.all(12.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      product['name'], 
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      "RM ${product['price']}", 
-                                      style: TextStyle(color: _greenBtn, fontWeight: FontWeight.bold, fontSize: 14),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
+            const SizedBox(width: 16),
 
-          // --- RIGHT: CART & WAITING NUMBERS ---
-          Expanded(
-            flex: 4,
-            child: Container(
-              decoration: BoxDecoration(border: Border(left: BorderSide(color: Colors.grey.shade300))),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    color: Colors.white,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _waitingNumberController,
-                                decoration: const InputDecoration(
-                                  labelText: "Waiting No.", 
-                                  border: OutlineInputBorder(), 
-                                  isDense: true,
-                                  prefixIcon: Icon(Icons.confirmation_number)
+            // 3. RIGHT COLUMN: CURRENT ORDER (Flex: 3)
+            Expanded(
+              flex: 3,
+              child: _buildCard(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text("Current Order", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      
+                      // Cart Area
+                      Expanded(
+                        child: _cart.isEmpty 
+                        ? Center(child: Text("Tap items to add to order.", style: TextStyle(color: Colors.grey.shade500)))
+                        : ListView.separated(
+                          itemCount: _cart.length,
+                          separatorBuilder: (_,__) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final item = _cart[index];
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              onTap: () => _editCartItem(index), 
+                              title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                              subtitle: item['notes'] != '' 
+                                ? Text(item['notes'], style: const TextStyle(color: Colors.orange, fontSize: 12)) 
+                                : null,
+                              trailing: Text("RM ${(item['price'] * item['qty']).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                              leading: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
+                                child: Text("${item['qty']}x", style: const TextStyle(fontWeight: FontWeight.bold)),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      
+                      const Divider(height: 32),
+
+                      // Waiting Number Input Area
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _waitingNumberController,
+                              decoration: const InputDecoration(
+                                labelText: "Waiting Number", 
+                                border: OutlineInputBorder(), 
+                                isDense: true,
+                              ),
+                              keyboardType: TextInputType.number,
+                              onChanged: (val) => setState(() => _selectedWaitingNumber = int.tryParse(val)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            height: 48,
+                            child: OutlinedButton(
+                              onPressed: _autoPickNumber, 
+                              style: OutlinedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                              child: const Text("Auto\nPick", textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.black)),
+                            ),
+                          )
+                        ],
+                      ),
+                      
+                      // Total Row
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("Total", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                          Text("RM ${_totalAmount.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 24),
+                      
+                      // Action Buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: SizedBox(
+                              height: 50,
+                              child: ElevatedButton(
+                                onPressed: _goToPayment,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _brandBrown,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  elevation: 0,
                                 ),
-                                keyboardType: TextInputType.number,
-                                onChanged: (val) => setState(() => _selectedWaitingNumber = int.tryParse(val)),
+                                child: const Text("Confirm Order", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              onPressed: _autoPickNumber, 
-                              icon: const Icon(Icons.autorenew),
-                              label: const Text("Auto")
-                            )
-                          ],
-                        ),
-                        if (_unavailableNumbers.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              const Icon(Icons.circle, size: 10, color: Colors.red),
-                              const SizedBox(width: 5),
-                              Text("Busy in Kitchen: ", style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
-                            ],
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _unavailableNumbers.join(', '),
-                            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14),
-                          ),
-                        ]
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: _cart.isEmpty 
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.shopping_cart_outlined, size: 48, color: Colors.grey.shade300),
-                            const SizedBox(height: 10),
-                            Text("Cart is empty", style: TextStyle(color: Colors.grey.shade400)),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                      itemCount: _cart.length,
-                      separatorBuilder: (_,__) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final item = _cart[index];
-                        return ListTile(
-                          onTap: () => _editCartItem(index), 
-                          title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: item['notes'] != '' 
-                            ? Text(item['notes'], style: const TextStyle(color: Colors.blue, fontSize: 12)) 
-                            : null,
-                          trailing: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text("RM ${(item['price'] * item['qty']).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                          leading: CircleAvatar(
-                            backgroundColor: Colors.grey.shade100, 
-                            child: Text("${item['qty']}", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold))
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -4))]
-                    ),
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text("Total", style: TextStyle(fontSize: 18, color: Colors.grey.shade600)),
-                            Text("RM ${_totalAmount.toStringAsFixed(2)}", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 56,
-                          child: ElevatedButton(
-                            onPressed: _goToPayment,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _greenBtn,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              elevation: 2,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 1,
+                            child: SizedBox(
+                              height: 50,
+                              child: OutlinedButton(
+                                onPressed: _clearCart,
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(color: Colors.grey.shade400),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                child: const Text("Clear", style: TextStyle(color: Colors.black, fontSize: 16)),
+                              ),
                             ),
-                            child: const Text("CHARGE", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1)),
                           ),
-                        ),
-                      ],
-                    ),
-                  )
-                ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
