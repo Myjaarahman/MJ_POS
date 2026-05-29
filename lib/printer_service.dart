@@ -35,7 +35,7 @@ class PrinterService {
 
       // --- 1. PRINT THE LOGO ---
       try {
-        final ByteData data = await rootBundle.load('assets/image_c972f9.jpg');
+        final ByteData data = await rootBundle.load('assets/pos.jpeg');
         final Uint8List bytesImg = data.buffer.asUint8List();
         final img.Image? logo = img.decodeImage(bytesImg);
         
