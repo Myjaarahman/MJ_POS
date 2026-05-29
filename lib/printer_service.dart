@@ -1,62 +1,65 @@
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:esc_pos_utils/esc_pos_utils.dart';
+import 'package:intl/intl.dart'; // Required for formatting the current Date
 
 class PrinterService {
-  // Target broadcast name from your test receipt printout
   static const String targetDeviceName = "9printer-58B"; 
 
-Future<void> printOrderReceipt({
+  // --- STICKY MEMORY VARIABLES ---
+  static BluetoothDevice? _connectedDevice;
+  static BluetoothCharacteristic? _writeCharacteristic;
+
+  // The UUIDs required by Web Bluetooth security
+  final List<Guid> commonPrinterServices = [
+    Guid("49535343-fe7d-4ae5-8fa9-9fafd205e455"), 
+    Guid("e7810a71-73ae-499d-8c15-faa9aef0c3f2"), 
+    Guid("000018f0-0000-1000-8000-00805f9b34fb"), 
+  ];
+
+  Future<void> printOrderReceipt({
     required List<Map<String, dynamic>> cart,
     required double total,
     required int waitingNumber,
     required String paymentMethod,
   }) async {
-    BluetoothDevice? printerDevice;
+    
+    // 1. CHECK MEMORY: If not connected, scan and ask for permission
+    if (_writeCharacteristic == null || _connectedDevice == null || _connectedDevice!.isConnected == false) {
+      await _scanAndConnect();
+    }
 
-    // 1. Scan for the 9printer
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-    var subscription = FlutterBluePlus.onScanResults.listen((results) {
-      for (ScanResult r in results) {
-        if (r.device.platformName == targetDeviceName) {
-          printerDevice = r.device;
-          FlutterBluePlus.stopScan();
-          break;
-        }
-      }
-    });
-
-    await Future.delayed(const Duration(seconds: 4));
-    await subscription.cancel();
-
-    if (printerDevice == null) {
-      print("Printer not found.");
+    // If they canceled the popup or the printer is off, abort safely.
+    if (_writeCharacteristic == null) {
+      print("Printer not found or user canceled connection.");
       return; 
     }
 
-    await printerDevice!.connect();
-    List<BluetoothService> services = await printerDevice!.discoverServices();
-    BluetoothCharacteristic? writeCharacteristic;
-    
-    for (BluetoothService service in services) {
-      for (BluetoothCharacteristic characteristic in service.characteristics) {
-        if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
-          writeCharacteristic = characteristic;
-          break;
-        }
-      }
-    }
-    
-    if (writeCharacteristic != null) {
+    // 2. GENERATE RECEIPT
+    try {
       final profile = await CapabilityProfile.load();
       final generator = Generator(PaperSize.mm58, profile);
       List<int> bytes = [];
 
+      // Format the current date (e.g. "29 May 2026, 10:56 PM")
+      String currentDate = DateFormat('dd MMM yyyy, h:mm a').format(DateTime.now());
+
       // --- TICKET HEADER ---
-      bytes += generator.text('MYJAA SWEET', styles: const PosStyles(align: PosAlign.center, bold: true, width: PosTextSize.size2, height: PosTextSize.size2));
-      bytes += generator.text('Muar, Johor', styles: const PosStyles(align: PosAlign.center));
+      bytes += generator.text('H&S Choices', styles: const PosStyles(align: PosAlign.center, bold: true, width: PosTextSize.size2, height: PosTextSize.size2));
+      
+      // Address (Split to fit 32-character limit beautifully)
+      bytes += generator.text('LAMAN KAK MISAI, 224,', styles: const PosStyles(align: PosAlign.center));
+      bytes += generator.text('Kampung Parit Keroma Darat,', styles: const PosStyles(align: PosAlign.center));
+      bytes += generator.text('84000 Muar, Johor', styles: const PosStyles(align: PosAlign.center));
       bytes += generator.feed(1);
       
-      bytes += generator.text('WAITING NO: $waitingNumber', styles: const PosStyles(align: PosAlign.center, bold: true, width: PosTextSize.size2, height: PosTextSize.size2));
+      // Contacts
+      bytes += generator.text('Hapiz: +60 17-648 5034', styles: const PosStyles(align: PosAlign.center));
+      bytes += generator.text('Sofia: +60 17-648 5374', styles: const PosStyles(align: PosAlign.center));
+      bytes += generator.feed(1);
+      
+      // Date and Order Number
+      bytes += generator.text('Date: $currentDate', styles: const PosStyles(align: PosAlign.center));
+      bytes += generator.text('Order No: $waitingNumber', styles: const PosStyles(align: PosAlign.center, bold: true, width: PosTextSize.size2, height: PosTextSize.size2));
       bytes += generator.feed(1);
       bytes += generator.text('--------------------------------', styles: const PosStyles(align: PosAlign.center));
 
@@ -66,13 +69,11 @@ Future<void> printOrderReceipt({
         int qty = item['qty'];
         double price = item['price'] * qty;
         
-        // Formats a clean left/right layout for 58mm
         bytes += generator.row([
           PosColumn(text: '${qty}x $itemName', width: 8, styles: const PosStyles(align: PosAlign.left)),
           PosColumn(text: price.toStringAsFixed(2), width: 4, styles: const PosStyles(align: PosAlign.right)),
         ]);
         
-        // Print notes if they exist (e.g. "No Sugar")
         if (item['notes'] != null && item['notes'].toString().isNotEmpty) {
            bytes += generator.text('   ** ${item['notes']}', styles: const PosStyles(align: PosAlign.left));
         }
@@ -85,79 +86,56 @@ Future<void> printOrderReceipt({
         PosColumn(text: 'RM ${total.toStringAsFixed(2)}', width: 6, styles: const PosStyles(align: PosAlign.right, bold: true)),
       ]);
       bytes += generator.text('PAID VIA: ${paymentMethod.toUpperCase()}', styles: const PosStyles(align: PosAlign.left));
+      
+      // Final whitespace and auto-cut
       bytes += generator.feed(2);
       bytes += generator.cut();
 
-      // Send to printer
-      await writeCharacteristic.write(bytes, withoutResponse: true);
+      // 3. SEND TO PRINTER 
+      await _writeCharacteristic!.write(bytes, withoutResponse: true);
+      print("Print successful!");
+
+    } catch (e) {
+      print("Printer disconnected or error: $e");
+      // If it fails (e.g., the printer was turned off), clear memory so it asks again next time.
+      _connectedDevice = null;
+      _writeCharacteristic = null;
     }
   }
 
-  Future<void> connectAndPrintTest() async {
-    BluetoothDevice? printerDevice;
-
-    // 1. Start scanning for BLE devices
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-
-    // 2. Listen to the scan results to find your printer
+  // --- INTERNAL HELPER TO SCAN & CONNECT ---
+  Future<void> _scanAndConnect() async {
+    print("Starting new scan...");
+    await FlutterBluePlus.startScan(
+      withServices: commonPrinterServices,
+      timeout: const Duration(seconds: 4)
+    );
+    
     var subscription = FlutterBluePlus.onScanResults.listen((results) {
       for (ScanResult r in results) {
-        if (r.device.platformName == targetDeviceName) {
-          printerDevice = r.device;
-          FlutterBluePlus.stopScan(); 
+        if (r.device.platformName == targetDeviceName || r.device.advName == targetDeviceName) {
+          _connectedDevice = r.device;
+          FlutterBluePlus.stopScan();
           break;
         }
       }
     });
 
-    // Wait for the 4-second scan to finish
     await Future.delayed(const Duration(seconds: 4));
     await subscription.cancel();
 
-    if (printerDevice == null) {
-      print("Printer '$targetDeviceName' not found. Make sure it's turned on.");
-      return;
-    }
-
-    print("Found printer! Connecting...");
-    await printerDevice!.connect();
-    
-    // 3. Discover services to find the data pipe
-    List<BluetoothService> services = await printerDevice!.discoverServices();
-    BluetoothCharacteristic? writeCharacteristic;
-    
-    for (BluetoothService service in services) {
-      for (BluetoothCharacteristic characteristic in service.characteristics) {
-        if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
-          writeCharacteristic = characteristic;
-          break;
+    if (_connectedDevice != null) {
+      await _connectedDevice!.connect();
+      List<BluetoothService> services = await _connectedDevice!.discoverServices();
+      
+      for (BluetoothService service in services) {
+        for (BluetoothCharacteristic characteristic in service.characteristics) {
+          if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
+            _writeCharacteristic = characteristic;
+            break;
+          }
         }
       }
-    }
-    
-    if (writeCharacteristic != null) {
-      // 4. Build the ESC/POS receipt data (58mm width format)
-      final profile = await CapabilityProfile.load();
-      final generator = Generator(PaperSize.mm58, profile);
-      
-      List<int> bytes = [];
-      bytes += generator.text(
-        'MYJAA SWEET', 
-        styles: const PosStyles(
-          align: PosAlign.center, 
-          height: PosTextSize.size2, 
-          width: PosTextSize.size2
-        )
-      );
-      bytes += generator.text('Receipt Test Success!', styles: const PosStyles(align: PosAlign.center));
-      bytes += generator.feed(2);
-      bytes += generator.cut();
-
-      // 5. Write binary commands directly to the hardware
-      await writeCharacteristic.write(bytes, withoutResponse: true);
-      print("Print data sent successfully!");
-    } else {
-      print("Could not locate a writable characteristic channel.");
     }
   }
 }

@@ -5,7 +5,7 @@ import 'payment_screen.dart';
 import 'add_product_screen.dart';
 import 'receipts_screen.dart';
 import 'kitchen_screen.dart'; 
-import 'printer_service.dart'; 
+import 'printer_service.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -110,7 +110,6 @@ class _PosScreenState extends State<PosScreen> {
         .listen((data) {
           if (mounted) {
             final active = data.where((o) => o['status'] == 'pending' || o['status'] == 'cooking' || o['status'] == 'ready').toList();
-            // Sort to show the oldest active orders at the top
             active.sort((a, b) => DateTime.parse(a['created_at']).compareTo(DateTime.parse(b['created_at'])));
             
             setState(() {
@@ -121,15 +120,12 @@ class _PosScreenState extends State<PosScreen> {
         });
   }
 
-  // --- UPDATED: ACTIVE ORDER DETAILS & PRINTER LOGIC ---
   Future<void> _showOrderDetails(Map<String, dynamic> order) async {
-    // 1. Fetch the items for this specific order
     final response = await supabase.from('order_items').select().eq('order_id', order['id']);
     final items = List<Map<String, dynamic>>.from(response);
 
     if (!mounted) return;
 
-    // 2. Show the dialog
     showDialog(
       context: context,
       builder: (context) {
@@ -170,9 +166,8 @@ class _PosScreenState extends State<PosScreen> {
               },
             ),
           ),
-          actionsAlignment: MainAxisAlignment.spaceBetween, // Spreads buttons out
+          actionsAlignment: MainAxisAlignment.spaceBetween,
           actions: [
-            // --- NEW: PRINTER BUTTON ---
             OutlinedButton.icon(
               icon: const Icon(Icons.print, color: Colors.blue),
               label: const Text("Print", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
@@ -181,7 +176,6 @@ class _PosScreenState extends State<PosScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
               ),
               onPressed: () async {
-                // Map the DB items to match what the printer expects
                 List<Map<String, dynamic>> mappedCart = items.map((item) {
                   return {
                     'name': item['product_name'],
@@ -211,8 +205,6 @@ class _PosScreenState extends State<PosScreen> {
                 }
               },
             ),
-            // ---------------------------
-
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -348,7 +340,7 @@ class _PosScreenState extends State<PosScreen> {
   double get _totalAmount => _cart.fold(0, (sum, item) => sum + (item['price'] * item['qty']));
 
   void _autoPickNumber() {
-    for (int i = 1; i <= 20; i++) {
+    for (int i = 1; i <= 18; i++) {
       if (!_unavailableNumbers.contains(i)) {
         setState(() {
           _selectedWaitingNumber = i;
@@ -357,12 +349,12 @@ class _PosScreenState extends State<PosScreen> {
         return;
       }
     }
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("All numbers 1-20 are full!")));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("All numbers 1-18 are full!")));
   }
 
   String _getAvailableNumbersString() {
     List<int> available = [];
-    for (int i = 1; i <= 20; i++) {
+    for (int i = 1; i <= 18; i++) {
       if (!_unavailableNumbers.contains(i)) available.add(i);
     }
     return available.join(', ');
@@ -390,7 +382,6 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  // --- DRAWER ---
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -434,15 +425,12 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  // --- CARD WRAPPER HELPER ---
   Widget _buildCard({required Widget child}) {
     return Container(
       decoration: BoxDecoration(
         color: _cardWhite,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))],
         border: Border.all(color: Colors.grey.shade200, width: 1),
       ),
       child: child,
@@ -455,8 +443,6 @@ class _PosScreenState extends State<PosScreen> {
       key: _scaffoldKey,
       backgroundColor: _bgBeige,
       drawer: _buildDrawer(),
-      
-      // --- BRANDED APP BAR ---
       appBar: AppBar(
         backgroundColor: _brandBrown,
         elevation: 0,
@@ -483,15 +469,11 @@ class _PosScreenState extends State<PosScreen> {
           )
         ],
       ),
-
-      // --- THREE COLUMN BODY ---
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            
-            // 1. LEFT COLUMN: ACTIVE ORDERS (Flex: 2)
             Expanded(
               flex: 2,
               child: _buildCard(
@@ -514,7 +496,7 @@ class _PosScreenState extends State<PosScreen> {
                                   if (order['status'] == 'ready') statusColor = Colors.green;
                                   
                                   return Container(
-                                    padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8, right: 4), // Asymmetrical padding to balance the icon button
+                                    padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8, right: 4),
                                     decoration: BoxDecoration(
                                       color: statusColor.withOpacity(0.1),
                                       borderRadius: BorderRadius.circular(8),
@@ -526,12 +508,10 @@ class _PosScreenState extends State<PosScreen> {
                                         const Spacer(),
                                         Text(order['status'].toString().toUpperCase(), style: TextStyle(fontWeight: FontWeight.bold, color: statusColor, fontSize: 12)),
                                         const SizedBox(width: 4),
-                                        
-                                        // --- THE NEW 3-DOT BUTTON ---
                                         IconButton(
                                           icon: Icon(Icons.more_vert, color: statusColor),
                                           padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(), // Minimizes extra padding around the icon
+                                          constraints: const BoxConstraints(),
                                           onPressed: () => _showOrderDetails(order),
                                         ),
                                       ],
@@ -546,23 +526,18 @@ class _PosScreenState extends State<PosScreen> {
               ),
             ),
             const SizedBox(width: 16),
-
-            // 2. MIDDLE COLUMN: MENU (Flex: 5)
             Expanded(
               flex: 5,
               child: _buildCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Header & Category Dropdown
                     Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           const Text("Menu", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                          
-                          // Category Filter
                           PopupMenuButton<int?>(
                             offset: const Offset(0, 40),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -607,8 +582,6 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                     ),
                     const Divider(height: 1),
-                    
-                    // Product Grid
                     Expanded(
                       child: StreamBuilder<List<Map<String, dynamic>>>(
                         stream: _getProductsStream(),
@@ -679,8 +652,6 @@ class _PosScreenState extends State<PosScreen> {
               ),
             ),
             const SizedBox(width: 16),
-
-            // 3. RIGHT COLUMN: CURRENT ORDER (Flex: 3)
             Expanded(
               flex: 3,
               child: _buildCard(
@@ -691,8 +662,6 @@ class _PosScreenState extends State<PosScreen> {
                     children: [
                       const Text("Current Order", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
-                      
-                      // Cart Area
                       Expanded(
                         child: _cart.isEmpty 
                         ? Center(child: Text("Tap items to add to order.", style: TextStyle(color: Colors.grey.shade500)))
@@ -718,10 +687,7 @@ class _PosScreenState extends State<PosScreen> {
                           },
                         ),
                       ),
-                      
                       const Divider(height: 32),
-
-                      // Waiting Number Input Area
                       Row(
                         children: [
                           Expanded(
@@ -747,8 +713,8 @@ class _PosScreenState extends State<PosScreen> {
                           )
                         ],
                       ),
-                      
-                      // Total Row
+                      const SizedBox(height: 8),
+
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -756,10 +722,7 @@ class _PosScreenState extends State<PosScreen> {
                           Text("RM ${_totalAmount.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                         ],
                       ),
-                      
                       const SizedBox(height: 24),
-                      
-                      // Action Buttons
                       Row(
                         children: [
                           Expanded(

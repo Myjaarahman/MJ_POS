@@ -100,10 +100,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
           ),
         );
 
-        if (wantReceipt == true) {
-          // Trigger printer only if they clicked 'Print Receipt'
+if (wantReceipt == true) {
+          // --- THE FIX: Add .toList() to create a safe copy of the cart in memory ---
           PrinterService().printOrderReceipt(
-            cart: widget.cart,
+            cart: widget.cart.toList(), // <--- THIS IS THE MAGIC FIX
             total: widget.totalAmount,
             waitingNumber: widget.waitingNumber,
             paymentMethod: paymentType,
@@ -114,7 +114,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         // --------------------------------
 
         if (mounted) {
-          Navigator.of(context).pop(true); // Go back to the main POS screen
+          Navigator.of(context).pop(true); 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text("Paid via ${paymentType.toUpperCase()} - Sent to Kitchen!"), 
