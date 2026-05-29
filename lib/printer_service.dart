@@ -103,11 +103,15 @@ class PrinterService {
     }
   }
 
-  // --- INTERNAL HELPER TO SCAN & CONNECT ---
+// --- INTERNAL HELPER TO SCAN & CONNECT ---
   Future<void> _scanAndConnect() async {
     print("Starting new scan...");
+    
+    // THE FIX: We removed 'withServices' and added 'withNames'.
+    // Now the iPad will look for the exact name of the printer instead 
+    // of relying on the hidden Bluetooth IDs!
     await FlutterBluePlus.startScan(
-      withServices: commonPrinterServices,
+      withNames: [targetDeviceName], 
       timeout: const Duration(seconds: 4)
     );
     
