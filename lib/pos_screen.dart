@@ -34,7 +34,7 @@ class _PosScreenState extends State<PosScreen> {
   String _selectedCategoryName = "All items";
   
   // Business Info
-  String _businessName = "Loading...";
+  String _businessName = "MJ POS";
   String _role = "Cashier"; 
 
   // --- THEME COLORS ---
