@@ -58,7 +58,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _cafeName = "Loading..."; 
+  String _cafeName = "MJ POS"; 
 
   @override
   void initState() {
