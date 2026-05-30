@@ -23,14 +23,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _categories = [];
   bool _isLoading = true;
-  String _businessName = "MJ POS";
+  String _businessName = "Loading...";
   String _role = "Admin";
 
-  // Form Controllers
+  // Product Form Controllers
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
   int? _selectedCategoryId;
-  String? _editingProductId; // If null, we are adding. If set, we are editing.
+  String? _editingProductId; 
+
+  // Category Form Controllers
+  final TextEditingController _categoryNameController = TextEditingController();
+  int? _editingCategoryId;
 
   @override
   void initState() {
@@ -43,6 +47,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   void dispose() {
     _nameController.dispose();
     _priceController.dispose();
+    _categoryNameController.dispose();
     super.dispose();
   }
 
@@ -51,7 +56,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       final user = supabase.auth.currentUser;
       if (user == null) return;
       final profile = await supabase.from('profiles').select('business_id, role').eq('id', user.id).single();
-      setState(() => _role = profile['role'].toString().toUpperCase());
+      if (mounted) setState(() => _role = profile['role'].toString().toUpperCase());
       
       if (profile['business_id'] != null) {
         final business = await supabase.from('businesses').select('name').eq('id', profile['business_id']).single();
@@ -63,26 +68,31 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   Future<void> _fetchCategoriesAndProducts() async {
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
     try {
-      final catResponse = await supabase.from('categories').select().order('name');
-      final prodResponse = await supabase.from('products').select().order('name');
+      // Added 10-second timeouts to prevent infinite loading if Bluefy drops connection
+      final catResponse = await supabase.from('categories').select().order('name').timeout(const Duration(seconds: 10));
+      final prodResponse = await supabase.from('products').select().order('name').timeout(const Duration(seconds: 10));
       
       if (mounted) {
         setState(() {
           _categories = List<Map<String, dynamic>>.from(catResponse);
           _products = List<Map<String, dynamic>>.from(prodResponse);
-          _isLoading = false;
         });
       }
     } catch (e) {
       debugPrint("Error fetching data: $e");
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Network timeout. Please refresh."), backgroundColor: Colors.red));
+    } finally {
+      // The finally block GUARANTEES the loading spinner stops, even on an error.
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- FORM ACTIONS ---
-  void _startEditing(Map<String, dynamic> product) {
+  // ==========================================
+  // PRODUCT ACTIONS
+  // ==========================================
+  void _startEditingProduct(Map<String, dynamic> product) {
     setState(() {
       _editingProductId = product['id'].toString();
       _nameController.text = product['name'];
@@ -91,7 +101,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     });
   }
 
-  void _clearForm() {
+  void _clearProductForm() {
     setState(() {
       _editingProductId = null;
       _nameController.clear();
@@ -101,10 +111,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   Future<void> _saveProduct() async {
-    // FIX 1: Force the iPad keyboard to close immediately
     FocusScope.of(context).unfocus(); 
-
-    // FIX 2: Automatically swap any commas for decimals so Bluefy doesn't break
     String safePrice = _priceController.text.replaceAll(',', '.').trim();
 
     if (_nameController.text.isEmpty || safePrice.isEmpty || _selectedCategoryId == null) {
@@ -116,25 +123,24 @@ class _AddProductScreenState extends State<AddProductScreen> {
     try {
       final productData = {
         'name': _nameController.text.trim(),
-        'price': double.tryParse(safePrice) ?? 0.0, // Uses the safe price here
+        'price': double.tryParse(safePrice) ?? 0.0,
         'category_id': _selectedCategoryId,
       };
 
       if (_editingProductId == null) {
-        // ADD NEW
-        await supabase.from('products').insert(productData);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Added!"), backgroundColor: Colors.green));
+        await supabase.from('products').insert(productData).timeout(const Duration(seconds: 10));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Added!"), backgroundColor: Colors.green));
       } else {
-        // UPDATE EXISTING
-        await supabase.from('products').update(productData).eq('id', _editingProductId!);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Updated!"), backgroundColor: Colors.blue));
+        await supabase.from('products').update(productData).eq('id', _editingProductId!).timeout(const Duration(seconds: 10));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Updated!"), backgroundColor: Colors.blue));
       }
       
-      _clearForm();
+      _clearProductForm();
       await _fetchCategoriesAndProducts();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
-      setState(() => _isLoading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -158,17 +164,93 @@ class _AddProductScreenState extends State<AddProductScreen> {
     if (confirm == true) {
       setState(() => _isLoading = true);
       try {
-        await supabase.from('products').delete().eq('id', id);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Deleted"), backgroundColor: Colors.red));
+        await supabase.from('products').delete().eq('id', id).timeout(const Duration(seconds: 10));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Deleted"), backgroundColor: Colors.red));
         await _fetchCategoriesAndProducts();
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
-        setState(() => _isLoading = false);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
       }
     }
   }
 
-  // --- UI COMPONENTS ---
+  // ==========================================
+  // CATEGORY ACTIONS
+  // ==========================================
+  void _startEditingCategory(Map<String, dynamic> category) {
+    setState(() {
+      _editingCategoryId = category['id'];
+      _categoryNameController.text = category['name'];
+    });
+  }
+
+  void _clearCategoryForm() {
+    setState(() {
+      _editingCategoryId = null;
+      _categoryNameController.clear();
+    });
+  }
+
+  Future<void> _saveCategory() async {
+    FocusScope.of(context).unfocus(); 
+    if (_categoryNameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Category name cannot be empty"), backgroundColor: Colors.orange));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      if (_editingCategoryId == null) {
+        await supabase.from('categories').insert({'name': _categoryNameController.text.trim()}).timeout(const Duration(seconds: 10));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Category Added!"), backgroundColor: Colors.green));
+      } else {
+        await supabase.from('categories').update({'name': _categoryNameController.text.trim()}).eq('id', _editingCategoryId!).timeout(const Duration(seconds: 10));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Category Updated!"), backgroundColor: Colors.blue));
+      }
+      _clearCategoryForm();
+      await _fetchCategoriesAndProducts();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _deleteCategory(int id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Delete Category?"),
+        content: const Text("This action cannot be undone. Make sure no products are using this category first!"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true), 
+            child: const Text("Delete", style: TextStyle(color: Colors.white))
+          ),
+        ],
+      )
+    );
+
+    if (confirm == true) {
+      setState(() => _isLoading = true);
+      try {
+        await supabase.from('categories').delete().eq('id', id).timeout(const Duration(seconds: 10));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Category Deleted"), backgroundColor: Colors.red));
+        await _fetchCategoriesAndProducts();
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: Cannot delete category if products are inside it."), duration: const Duration(seconds: 4), backgroundColor: Colors.red));
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  // ==========================================
+  // UI HELPERS
+  // ==========================================
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -232,229 +314,366 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
+  // ==========================================
+  // MAIN BUILD
+  // ==========================================
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: _bgBeige,
-      drawer: _buildDrawer(),
-      appBar: AppBar(
-        backgroundColor: _brandBrown,
-        elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.menu, color: Colors.white), onPressed: () => _scaffoldKey.currentState?.openDrawer()),
-        title: const Text("Inventory Management", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
-      ),
-      body: _isLoading 
-        ? const Center(child: CircularProgressIndicator())
-        : Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return DefaultTabController(
+      length: 2, // 2 Tabs: Products and Categories
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: _bgBeige,
+        drawer: _buildDrawer(),
+        appBar: AppBar(
+          backgroundColor: _brandBrown,
+          elevation: 0,
+          leading: IconButton(icon: const Icon(Icons.menu, color: Colors.white), onPressed: () => _scaffoldKey.currentState?.openDrawer()),
+          title: const Text("Inventory Management", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
+          bottom: const TabBar(
+            indicatorColor: Colors.white,
+            indicatorWeight: 4,
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white60,
+            labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            tabs: [
+              Tab(icon: Icon(Icons.shopping_bag), text: "Manage Products"),
+              Tab(icon: Icon(Icons.category), text: "Manage Categories"),
+            ],
+          ),
+        ),
+        body: _isLoading 
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
               children: [
-                
-                // --- LEFT COLUMN: PRODUCT FORM ---
-                Expanded(
-                  flex: 3,
-                  child: _buildCard(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(_editingProductId == null ? Icons.add_circle : Icons.edit, color: _brandBrown, size: 28),
-                              const SizedBox(width: 12),
-                              Text(
-                                _editingProductId == null ? "Add New Product" : "Edit Product", 
-                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A1A1A))
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 32),
-                          
-                          // Form Fields
-                          Text("PRODUCT NAME", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _nameController,
-                            decoration: InputDecoration(
-                              hintText: "e.g., Iced Spanish Latte",
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
-                              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
-                              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _brandBrown, width: 2)),
-                            ),
-                          ),
-                          
-                          const SizedBox(height: 24),
-                          Text("PRICE (RM)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _priceController,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: InputDecoration(
-                              hintText: "0.00",
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
-                              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
-                              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _brandBrown, width: 2)),
-                            ),
-                          ),
-                          
-                          const SizedBox(height: 24),
-                          Text("CATEGORY", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.grey.shade200),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<int>(
-                                value: _selectedCategoryId,
-                                hint: const Text("Select a category"),
-                                isExpanded: true,
-                                icon: const Icon(Icons.keyboard_arrow_down),
-                                items: _categories.map((cat) {
-                                  return DropdownMenuItem<int>(
-                                    value: cat['id'],
-                                    child: Text(cat['name'], style: const TextStyle(fontWeight: FontWeight.w500)),
-                                  );
-                                }).toList(),
-                                onChanged: (val) => setState(() => _selectedCategoryId = val),
-                              ),
-                            ),
-                          ),
+                _buildProductTab(),
+                _buildCategoryTab(),
+              ],
+            ),
+      ),
+    );
+  }
 
-                          const SizedBox(height: 40),
-                          
-                          // Action Buttons
-                          SizedBox(
-                            height: 54,
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _brandBrown,
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              ),
-                              onPressed: _saveProduct,
-                              child: Text(_editingProductId == null ? "Save Product" : "Update Product", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                          if (_editingProductId != null) ...[
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              height: 54,
-                              child: OutlinedButton(
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(color: Colors.grey.shade300),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                                onPressed: _clearForm,
-                                child: const Text("Cancel Edit", style: TextStyle(fontSize: 16, color: Colors.black)),
-                              ),
-                            ),
-                          ]
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                
-                const SizedBox(width: 24),
-
-                // --- RIGHT COLUMN: INVENTORY LIST ---
-                Expanded(
-                  flex: 5,
-                  child: _buildCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+  // ==========================================
+  // TAB 1: PRODUCT MANAGEMENT UI
+  // ==========================================
+  Widget _buildProductTab() {
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // LEFT COLUMN: FORM
+          Expanded(
+            flex: 3,
+            child: _buildCard(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text("Current Inventory", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A1A1A))),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(20)),
-                                child: Text("${_products.length} Items", style: TextStyle(fontWeight: FontWeight.w700, color: Colors.grey.shade600)),
-                              )
-                            ],
-                          ),
-                        ),
-                        const Divider(height: 1),
-                        
-                        Expanded(
-                          child: _products.isEmpty 
-                            ? Center(child: Text("No products found.", style: TextStyle(color: Colors.grey.shade500)))
-                            : ListView.separated(
-                                padding: const EdgeInsets.all(16),
-                                itemCount: _products.length,
-                                separatorBuilder: (_, __) => const Divider(height: 1),
-                                itemBuilder: (context, index) {
-                                  final product = _products[index];
-                                  return ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                    leading: Container(
-                                      height: 48, width: 48,
-                                      decoration: BoxDecoration(color: _bgBeige, borderRadius: BorderRadius.circular(8)),
-                                      child: Icon(Icons.fastfood, color: _brandBrown.withOpacity(0.5)),
-                                    ),
-                                    title: Text(product['name'], style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Color(0xFF2D2D2D))),
-                                    subtitle: Padding(
-                                      padding: const EdgeInsets.only(top: 4.0),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                            decoration: BoxDecoration(color: Colors.indigo.shade50, borderRadius: BorderRadius.circular(4)),
-                                            child: Text(
-                                              _getCategoryName(product['category_id']).toUpperCase(), 
-                                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.indigo.shade700)
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text("RM ${product['price']}", style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: Color(0xFF1A1A1A))),
-                                        const SizedBox(width: 24),
-                                        IconButton(
-                                          icon: const Icon(Icons.edit_outlined, color: Colors.blue),
-                                          tooltip: "Edit Product",
-                                          onPressed: () => _startEditing(product),
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                          tooltip: "Delete Product",
-                                          onPressed: () => _deleteProduct(product['id'].toString()),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
+                        Icon(_editingProductId == null ? Icons.add_circle : Icons.edit, color: _brandBrown, size: 28),
+                        const SizedBox(width: 12),
+                        Text(
+                          _editingProductId == null ? "Add New Product" : "Edit Product", 
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A1A1A))
                         ),
                       ],
                     ),
-                  ),
+                    const SizedBox(height: 32),
+                    
+                    Text("PRODUCT NAME", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _nameController,
+                      decoration: InputDecoration(
+                        hintText: "e.g., Iced Spanish Latte",
+                        filled: true,
+                        fillColor: Colors.grey.shade50,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _brandBrown, width: 2)),
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 24),
+                    Text("PRICE (RM)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _priceController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        hintText: "0.00",
+                        filled: true,
+                        fillColor: Colors.grey.shade50,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _brandBrown, width: 2)),
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 24),
+                    Text("CATEGORY", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade200)),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int>(
+                          value: _selectedCategoryId,
+                          hint: const Text("Select a category"),
+                          isExpanded: true,
+                          icon: const Icon(Icons.keyboard_arrow_down),
+                          items: _categories.map((cat) {
+                            return DropdownMenuItem<int>(
+                              value: cat['id'],
+                              child: Text(cat['name'], style: const TextStyle(fontWeight: FontWeight.w500)),
+                            );
+                          }).toList(),
+                          onChanged: (val) => setState(() => _selectedCategoryId = val),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 40),
+                    SizedBox(
+                      height: 54,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: _brandBrown, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                        onPressed: _saveProduct,
+                        child: Text(_editingProductId == null ? "Save Product" : "Update Product", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    if (_editingProductId != null) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 54,
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey.shade300), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                          onPressed: _clearProductForm,
+                          child: const Text("Cancel Edit", style: TextStyle(fontSize: 16, color: Colors.black)),
+                        ),
+                      ),
+                    ]
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
+          
+          const SizedBox(width: 24),
+
+          // RIGHT COLUMN: PRODUCT LIST
+          Expanded(
+            flex: 5,
+            child: _buildCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Current Inventory", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A1A1A))),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(20)),
+                          child: Text("${_products.length} Items", style: TextStyle(fontWeight: FontWeight.w700, color: Colors.grey.shade600)),
+                        )
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: _products.isEmpty 
+                      ? Center(child: Text("No products found.", style: TextStyle(color: Colors.grey.shade500)))
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _products.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final product = _products[index];
+                            return ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              leading: Container(
+                                height: 48, width: 48,
+                                decoration: BoxDecoration(color: _bgBeige, borderRadius: BorderRadius.circular(8)),
+                                child: Icon(Icons.fastfood, color: _brandBrown.withOpacity(0.5)),
+                              ),
+                              title: Text(product['name'], style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Color(0xFF2D2D2D))),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 4.0),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(color: Colors.indigo.shade50, borderRadius: BorderRadius.circular(4)),
+                                      child: Text(
+                                        _getCategoryName(product['category_id']).toUpperCase(), 
+                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.indigo.shade700)
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text("RM ${product['price']}", style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: Color(0xFF1A1A1A))),
+                                  const SizedBox(width: 24),
+                                  IconButton(icon: const Icon(Icons.edit_outlined, color: Colors.blue), onPressed: () => _startEditingProduct(product)),
+                                  IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => _deleteProduct(product['id'].toString())),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // TAB 2: CATEGORY MANAGEMENT UI
+  // ==========================================
+  Widget _buildCategoryTab() {
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // LEFT COLUMN: CATEGORY FORM
+          Expanded(
+            flex: 3,
+            child: _buildCard(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(_editingCategoryId == null ? Icons.add_circle : Icons.edit, color: _brandBrown, size: 28),
+                        const SizedBox(width: 12),
+                        Text(
+                          _editingCategoryId == null ? "Add New Category" : "Edit Category", 
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A1A1A))
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 32),
+                    
+                    Text("CATEGORY NAME", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey.shade600, letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _categoryNameController,
+                      decoration: InputDecoration(
+                        hintText: "e.g., Hot Beverages",
+                        filled: true,
+                        fillColor: Colors.grey.shade50,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: _brandBrown, width: 2)),
+                      ),
+                    ),
+
+                    const SizedBox(height: 40),
+                    SizedBox(
+                      height: 54,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: _brandBrown, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                        onPressed: _saveCategory,
+                        child: Text(_editingCategoryId == null ? "Save Category" : "Update Category", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    if (_editingCategoryId != null) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 54,
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey.shade300), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                          onPressed: _clearCategoryForm,
+                          child: const Text("Cancel Edit", style: TextStyle(fontSize: 16, color: Colors.black)),
+                        ),
+                      ),
+                    ]
+                  ],
+                ),
+              ),
+            ),
+          ),
+          
+          const SizedBox(width: 24),
+
+          // RIGHT COLUMN: CATEGORY LIST
+          Expanded(
+            flex: 5,
+            child: _buildCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Menu Categories", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A1A1A))),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(20)),
+                          child: Text("${_categories.length} Categories", style: TextStyle(fontWeight: FontWeight.w700, color: Colors.grey.shade600)),
+                        )
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: _categories.isEmpty 
+                      ? Center(child: Text("No categories found.", style: TextStyle(color: Colors.grey.shade500)))
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _categories.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final category = _categories[index];
+                            return ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              leading: Container(
+                                height: 48, width: 48,
+                                decoration: BoxDecoration(color: Colors.indigo.shade50, borderRadius: BorderRadius.circular(8)),
+                                child: Icon(Icons.folder, color: Colors.indigo.shade300),
+                              ),
+                              title: Text(category['name'], style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Color(0xFF2D2D2D))),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(icon: const Icon(Icons.edit_outlined, color: Colors.blue), onPressed: () => _startEditingCategory(category)),
+                                  IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => _deleteCategory(category['id'])),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
