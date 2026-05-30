@@ -33,21 +33,6 @@ class PrinterService {
 
       String currentDate = DateFormat('dd MMM yyyy, h:mm a').format(DateTime.now());
 
-      // --- 1. PRINT THE LOGO ---
-      try {
-        final ByteData data = await rootBundle.load('assets/pos.jpeg');
-        final Uint8List bytesImg = data.buffer.asUint8List();
-        final img.Image? logo = img.decodeImage(bytesImg);
-        
-        if (logo != null) {
-          // Resize width to 250 pixels so it fits nicely on a 58mm roll
-          final img.Image resizedLogo = img.copyResize(logo, width: 250); 
-          bytes += generator.image(resizedLogo, align: PosAlign.center);
-        }
-      } catch (e) {
-        print("Logo failed to load/print: $e");
-      }
-
       // --- 2. TICKET HEADER ---
       bytes += generator.text('H&S CHOICES', styles: const PosStyles(align: PosAlign.center, bold: true, width: PosTextSize.size2, height: PosTextSize.size2));
       
