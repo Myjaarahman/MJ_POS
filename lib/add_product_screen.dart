@@ -112,6 +112,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   Future<void> _saveProduct() async {
     FocusScope.of(context).unfocus(); 
+    
+    // --- THE MAGIC FIX FOR BLUEFY ---
+    // Wait for the iPad keyboard animation to completely finish sliding down.
+    // If we send the network request while the screen is resizing, Bluefy kills it!
+    await Future.delayed(const Duration(milliseconds: 500));
+
     String safePrice = _priceController.text.replaceAll(',', '.').trim();
 
     if (_nameController.text.isEmpty || safePrice.isEmpty || _selectedCategoryId == null) {
