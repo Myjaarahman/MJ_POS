@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'login_screen.dart'; 
 import 'pos_screen.dart'; 
-
+import 'package:wakelock_plus/wakelock_plus.dart';
 // Imports from your other files
 import 'add_product_screen.dart'; 
 import 'kitchen_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  WakelockPlus.enable();
 
   await Supabase.initialize(
     url: 'https://edofoaaxpxwxkcbzvqsu.supabase.co',
